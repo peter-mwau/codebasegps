@@ -38,6 +38,9 @@ export function activate(context: vscode.ExtensionContext) {
 						const results = await analyzeCodebase(message.text);
 						panel.webview.postMessage({ command: 'searchResults', results });
 						break;
+					case 'analyzeWithLLM':
+						await analyzeWithLLM(message.text, panel);
+						break;
 				}
 			},
 			undefined,
@@ -52,39 +55,124 @@ export function activate(context: vscode.ExtensionContext) {
 				<meta name="viewport" content="width=device-width, initial-scale=1.0">
 				<title>codebaseGPS</title>
 				<style>
+					:root {
+						color-scheme: light dark;
+					}
 					body { 
-						padding: 20px; 
+						padding: 16px; 
 						font-family: var(--vscode-font-family);
+						color: var(--vscode-foreground);
+						background: var(--vscode-editor-background);
 					}
-					.search-container {
-						margin: 20px 0;
+					.app-header {
+						display: flex;
+						align-items: baseline;
+						gap: 10px;
+						margin-bottom: 12px;
+						padding: 10px 12px;
+						border: 1px solid var(--vscode-panel-border);
+						border-radius: 8px;
+						background: var(--vscode-sideBarSectionHeader-background);
 					}
-					input {
-						width: 70%;
-						padding: 8px;
-						margin-right: 10px;
-						background: var(--vscode-input-background);
-						color: var(--vscode-input-foreground);
-						border: 1px solid var(--vscode-input-border);
+					.app-title {
+						font-size: 16px;
+						font-weight: 700;
 					}
-					button {
-						padding: 8px 16px;
-						background: var(--vscode-button-background);
-						color: var(--vscode-button-foreground);
-						border: none;
-						cursor: pointer;
+					.app-subtitle {
+						font-size: 12px;
+						opacity: 0.8;
 					}
-					button:hover {
-						background: var(--vscode-button-hoverBackground);
+					.app {
+						display: grid;
+						grid-template-columns: 2fr 1fr;
+						gap: 16px;
+						height: calc(100vh - 32px);
+					}
+					.panel {
+						display: flex;
+						flex-direction: column;
+						border: 1px solid var(--vscode-panel-border);
+						border-radius: 8px;
+						background: var(--vscode-sideBar-background);
+						overflow: hidden;
+					}
+					.panel-header {
+						padding: 12px 14px;
+						font-weight: 600;
+						border-bottom: 1px solid var(--vscode-panel-border);
+						background: var(--vscode-sideBarSectionHeader-background);
+					}
+					.panel-body {
+						padding: 14px;
+						overflow: auto;
+						flex: 1;
 					}
 					#results {
-						margin-top: 20px;
+						height: 100%;
 					}
 					.file-result {
 						margin: 10px 0;
 						padding: 10px;
 						background: var(--vscode-editor-background);
 						border-left: 3px solid var(--vscode-textLink-foreground);
+						border-radius: 4px;
+					}
+					.llm-response {
+						padding: 14px;
+						background: var(--vscode-editor-background);
+						border: 1px solid var(--vscode-panel-border);
+						border-radius: 6px;
+						white-space: pre-wrap;
+						line-height: 1.6;
+					}
+					.composer {
+						display: flex;
+						flex-direction: column;
+						gap: 12px;
+					}
+					.composer-input {
+						display: flex;
+						align-items: center;
+						gap: 8px;
+						padding: 10px 12px;
+						border-radius: 10px;
+						background: var(--vscode-input-background);
+						border: 1px solid var(--vscode-input-border);
+						box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+					}
+					textarea {
+						flex: 1;
+						min-height: 120px;
+						resize: vertical;
+						background: transparent;
+						color: var(--vscode-input-foreground);
+						border: none;
+						outline: none;
+						font-family: var(--vscode-font-family);
+						font-size: 13px;
+						line-height: 1.5;
+					}
+					.button-group {
+						display: flex;
+						gap: 8px;
+					}
+					button {
+						padding: 8px 12px;
+						background: var(--vscode-button-background);
+						color: var(--vscode-button-foreground);
+						border: none;
+						cursor: pointer;
+						border-radius: 6px;
+					}
+					button:hover {
+						background: var(--vscode-button-hoverBackground);
+					}
+					.secondary {
+						background: var(--vscode-button-secondaryBackground);
+						color: var(--vscode-button-secondaryForeground);
+					}
+					.secondary:hover {
+						background: var(--vscode-button-secondaryHoverBackground);
 					}
 				</style>
 				<script>
@@ -95,6 +183,14 @@ export function activate(context: vscode.ExtensionContext) {
 						if (searchText) {
 							document.getElementById('results').innerHTML = '<p>Searching...</p>';
 							vscode.postMessage({ command: 'search', text: searchText });
+						}
+					}
+				
+					function analyzeWithAI() {
+						const searchText = document.getElementById('searchInput').value;
+						if (searchText) {
+							document.getElementById('results').innerHTML = '<p>🤖 Analyzing codebase with AI...</p>';
+							vscode.postMessage({ command: 'analyzeWithLLM', text: searchText });
 						}
 					}
 					
@@ -115,24 +211,138 @@ export function activate(context: vscode.ExtensionContext) {
 									});
 								}
 								break;
+							case 'llmResponse':
+								const resultsDiv2 = document.getElementById('results');
+								resultsDiv2.innerHTML = '<div class="llm-response">' + message.text + '</div>';
+								break;
+							case 'llmChunk':
+								const existingResponse = document.querySelector('.llm-response');
+								if (existingResponse) {
+									existingResponse.textContent += message.text;
+								}
+								break;
 						}
 					});
 				</script>
 			</head>
 			<body>
-				<h1>codebaseGPS</h1>
-				<p>Search and analyze your workspace files</p>
-				<div class="search-container">
-					<input type="text" id="searchInput" placeholder="Enter text to search..." />
-					<button onclick="searchCodebase()">Search</button>
+				<div class="app-header">
+					<div class="app-title">codebaseGPS</div>
+					<div class="app-subtitle">AI codebase assistant</div>
 				</div>
-				<div id="results"></div>
+				<div class="app">
+					<div class="panel">
+						<div class="panel-header">Codebase Analysis</div>
+						<div class="panel-body">
+							<div id="results">Use the prompt panel to search or analyze your codebase.</div>
+						</div>
+					</div>
+					<div class="panel">
+						<div class="panel-header">Prompt Panel</div>
+						<div class="panel-body">
+							<div class="composer">
+								<div class="composer-input">
+									<textarea id="searchInput" placeholder="Ask anything about your codebase..."></textarea>
+								</div>
+								<div class="button-group">
+									<button class="secondary" onclick="searchCodebase()">🔍 Search</button>
+									<button onclick="analyzeWithAI()">🤖 AI Analyze</button>
+								</div>
+								<p style="opacity: 0.8; font-size: 12px; margin: 4px 0 0;">Tip: Try “Which file should I edit to render the wallet balance?”</p>
+							</div>
+						</div>
+					</div>
+				</div>
 			</body>
 			</html>`;
 		}
 	});
 
 	context.subscriptions.push(disposable);
+}
+
+// Function to analyze with LLM
+async function analyzeWithLLM(userQuery: string, panel: vscode.WebviewPanel) {
+	try {
+		// Get GitHub Copilot models
+		const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
+		
+		if (models.length === 0) {
+			panel.webview.postMessage({ 
+				command: 'llmResponse', 
+				text: '⚠️ GitHub Copilot is not available. Please ensure you have GitHub Copilot enabled in VS Code.' 
+			});
+			return;
+		}
+
+		const model = models[0];
+
+		// Collect codebase context
+		const codebaseContext = await collectCodebaseContext();
+
+		// Create messages for the LLM
+		const messages = [
+			vscode.LanguageModelChatMessage.User(
+				`You are a helpful code assistant analyzing a codebase. Here's the project structure and file contents:
+
+${codebaseContext}
+
+User question: ${userQuery}
+
+Provide a helpful, specific answer with file paths and line numbers when relevant. Be concise but thorough.`
+			)
+		];
+
+		// Send request and stream response
+		const response = await model.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
+		
+		let fullResponse = '';
+		panel.webview.postMessage({ command: 'llmResponse', text: '' });
+		
+		for await (const chunk of response.text) {
+			fullResponse += chunk;
+			panel.webview.postMessage({ command: 'llmChunk', text: chunk });
+		}
+
+	} catch (error: any) {
+		panel.webview.postMessage({ 
+			command: 'llmResponse', 
+			text: `❌ Error: ${error.message}` 
+		});
+	}
+}
+
+// Function to collect codebase context
+async function collectCodebaseContext(): Promise<string> {
+	const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+	if (!workspaceFolder) {
+		return 'No workspace folder open.';
+	}
+
+	// Find relevant files (limit to avoid token overflow)
+	const files = await vscode.workspace.findFiles(
+		'**/*.{ts,js,tsx,jsx,py,java,json,md}',
+		'**/node_modules/**',
+		50 // Limit to 50 files
+	);
+
+	let context = `Workspace: ${workspaceFolder.name}\n\nFiles:\n`;
+	
+	for (const file of files) {
+		try {
+			const relativePath = vscode.workspace.asRelativePath(file);
+			const content = await vscode.workspace.fs.readFile(file);
+			const text = new TextDecoder().decode(content);
+			
+			// Limit file content to first 500 characters to avoid token overflow
+			const preview = text.slice(0, 500);
+			context += `\n--- ${relativePath} ---\n${preview}${text.length > 500 ? '\n... (truncated)' : ''}\n`;
+		} catch (error) {
+			console.error(`Error reading ${file.fsPath}:`, error);
+		}
+	}
+
+	return context;
 }
 
 // Function to analyze codebase
@@ -143,7 +353,7 @@ async function analyzeCodebase(searchText: string) {
 	}
 
 	// Find all TypeScript and JavaScript files, excluding node_modules
-	const files = await vscode.workspace.findFiles('**/*.{ts,js,tsx,jsx}', '**/node_modules/**');
+	const files = await vscode.workspace.findFiles('**/*.{ts,js,java,cpp,md,env,yaml,json,py,tsx,jsx}', '**/node_modules/**');
 	
 	const results = [];
 	for (const file of files) {
