@@ -2,6 +2,7 @@
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
 
+const BACKEND_URL = 'https://922d-41-90-172-34.ngrok-free.app';
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
@@ -261,7 +262,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(disposable);
 }
 
-// Function to analyze with LLM
+// Function to analyze with LLM(vscode copilot)
 async function analyzeWithLLM(userQuery: string, panel: vscode.WebviewPanel) {
 	try {
 		// Get GitHub Copilot models
@@ -310,6 +311,57 @@ Provide a helpful, specific answer with file paths and line numbers when relevan
 			text: `❌ Error: ${error.message}` 
 		});
 	}
+}
+
+// async function analyzeWithLLM(userQuery: string, panel: vscode.WebviewPanel) {
+//     try {
+//         panel.webview.postMessage({ command: 'llmResponse', text: '📡 Connecting to Codebase GPS Brain...' });
+
+//         // 1. Collect full codebase context (no more 500-char limit!)
+//         const codebaseContext = await collectCodebaseContext();
+
+//         // 2. Prepare the payload for your FastAPI Dispatcher
+//         const payload = {
+//             task: "search", // Or "impact" depending on your UI logic
+//             context: codebaseContext,
+//             query: userQuery
+//         };
+
+//         // 3. Call your FastAPI Backend
+//         const response = await fetch(`${BACKEND_URL}/gps/query`, {
+//             method: 'POST',
+//             headers: { 'Content-Type': 'application/json' },
+//             body: JSON.stringify(payload)
+//         });
+
+//         if (!response.ok) {
+//             throw new Error(`Backend returned ${response.status}: ${await response.text()}`);
+//         }
+
+//         const result = await response.json() as { status: string; data: any };
+
+//         // 4. Handle the Response (Your FastAPI returns { status, data, task })
+//         if (result.status === 'success') {
+//             // If it's the search/impact task, it returns a structured string or JSON
+//             const formattedResponse = formatAIResponse(result.data, payload.task);
+//             panel.webview.postMessage({ command: 'llmResponse', text: formattedResponse });
+//         }
+
+//     } catch (error: any) {
+//         panel.webview.postMessage({ 
+//             command: 'llmResponse', 
+//             text: `❌ Backend Error: ${error.message}. Make sure ngrok is running!` 
+//         });
+//     }
+// }
+
+// Helper to turn JSON data from your Backend into nice Markdown for the Webview
+function formatAIResponse(data: any, task: string): string {
+    if (task === 'impact') {
+        return `### ⚠️ Risk Score: ${data.risk_score}/10\n\n**Analysis:** ${data.explanation}\n\n**Affected Files:**\n${data.affected_modules.join('\n')}`;
+    }
+    // Default for search
+    return data.summary || JSON.stringify(data, null, 2);
 }
 
 // Function to collect codebase context
