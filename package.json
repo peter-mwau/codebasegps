@@ -3,30 +3,23 @@
     "displayName": "codebaseGPS",
     "description": "A VS Code extension that acts as you're guide in any project(either large, foreign, new, legacy, complicated). Helps you understand code easily, lookup activities & supports NL interaction.",
     "version": "0.0.1",
-    "engines": 
-    {
-        "vscode": "^1.108.1"
+    "engines": {
+        "vscode": "^1.108.2"
     },
-    "categories": 
-    [
+    "categories": [
         "Other"
     ],
-    "activationEvents": 
-    [
-    ],
+    "activationEvents": [],
     "main": "./out/extension.js",
-    "contributes": 
-    {
-        "commands": 
-        [
+    "contributes": {
+        "commands": [
             {
                 "command": "codebasegps.helloKenya",
-                "title": "Hello Kenya"
+                "title": "codebaseGPS"
             }
         ]
     },
-    "scripts": 
-    {
+    "scripts": {
         "vscode:prepublish": "npm run compile",
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
@@ -34,15 +27,17 @@
         "lint": "eslint src",
         "test": "vscode-test"
     },
-    "devDependencies": 
-    {
-        "@types/vscode": "^1.108.1",
+    "devDependencies": {
         "@types/mocha": "^10.0.10",
         "@types/node": "22.x",
-        "typescript-eslint": "^8.52.0",
+        "@types/vscode": "^1.108.1",
+        "@vscode/test-cli": "^0.0.12",
+        "@vscode/test-electron": "^2.5.2",
         "eslint": "^9.39.2",
         "typescript": "^5.9.3",
-        "@vscode/test-cli": "^0.0.12",
-        "@vscode/test-electron": "^2.5.2"
+        "typescript-eslint": "^8.52.0"
+    },
+    "dependencies": {
+        "@google/generative-ai": "^0.24.1"
     }
 }
