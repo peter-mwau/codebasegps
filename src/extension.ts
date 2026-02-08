@@ -2,7 +2,8 @@
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
 
-const BACKEND_URL = 'https://922d-41-90-172-34.ngrok-free.app';
+
+const BACKEND_URL = process.env.BACKEND_URL || 'https://codebasegpsservice-production.up.railway.app';
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
