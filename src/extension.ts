@@ -41,12 +41,19 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
             case 'map': {
-              // Generate dependency map via backend
               panel.webview.postMessage({ command: 'llmResponse', text: '📡 Generating dependency map...' });
 
+              if (shouldUseLocalLLM()) {
+                const llmGraph = await generateDependencyMapWithLLM(message.text ?? '', panel);
+                if (llmGraph) {
+                  panel.webview.postMessage({ command: 'graphData', data: llmGraph });
+                  break;
+                }
+              }
+
+              // Fallback to backend if LLM is not available or fails
               const codebaseContext = await collectCodebaseContext();
 
-              // Use native fetch if available, else fallback to node-fetch
               let _fetch: any = (globalThis as any).fetch;
               if (typeof _fetch === 'undefined') {
                 try {
@@ -64,7 +71,7 @@ export function activate(context: vscode.ExtensionContext) {
                   body: JSON.stringify({
                     task: 'map',
                     context: codebaseContext,
-                    query: message.text ?? "" // <-- send empty string instead of null
+                    query: message.text ?? ""
                   })
                 });
 
@@ -76,7 +83,6 @@ export function activate(context: vscode.ExtensionContext) {
 
                 const json = await resp.json();
                 if (json.status === 'success' && json.data) {
-                  // Expect json.data to follow GraphResponse: { nodes: [{id,label,type,group,filePath?}], links: [{source,target,type}] }
                   panel.webview.postMessage({ command: 'graphData', data: json.data });
                 } else {
                   panel.webview.postMessage({ command: 'llmResponse', text: `❌ Backend returned unexpected: ${JSON.stringify(json)}` });
@@ -85,6 +91,21 @@ export function activate(context: vscode.ExtensionContext) {
                 panel.webview.postMessage({ command: 'llmResponse', text: `❌ Fetch error: ${err?.message ?? String(err)}` });
               }
 
+              break;
+            }
+
+            case 'diagram': {
+              panel.webview.postMessage({ command: 'llmResponse', text: '📡 Generating diagram...' });
+
+              if (shouldUseLocalLLM()) {
+                const diagramText = await generateDiagramWithLLM(message.diagramType ?? 'flowchart', message.text ?? '', panel);
+                if (diagramText) {
+                  panel.webview.postMessage({ command: 'diagramData', diagram: diagramText, diagramType: message.diagramType ?? 'flowchart' });
+                  break;
+                }
+              }
+
+              panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Diagram generation via backend is not implemented yet.' });
               break;
             }
 
@@ -186,6 +207,9 @@ async function analyzeWithLLM(userQuery: string, panel: vscode.WebviewPanel) {
     // Attempt to use VS Code's LLM (if available)
     const lmNamespace: any = (vscode as any).lm;
     if (lmNamespace && typeof lmNamespace.selectChatModels === 'function') {
+      if (!shouldUseLocalLLM()) {
+        panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Local LLM disabled. Using backend instead.' });
+      } else {
       try {
         const models = await lmNamespace.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
         if (models && models.length > 0) {
@@ -218,6 +242,7 @@ Provide a helpful, specific answer with file paths and line numbers when relevan
       } catch (err) {
         // If any error using the local LLM API, silently fall back to backend path below
         console.warn('Local LLM API failed, falling back to backend', err);
+      }
       }
     } else {
       panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Local LLM API not available in this VS Code. Using backend instead.' });
@@ -264,6 +289,165 @@ Provide a helpful, specific answer with file paths and line numbers when relevan
   } catch (err: any) {
     panel.webview.postMessage({ command: 'llmResponse', text: `❌ Error: ${err?.message ?? String(err)}` });
   }
+}
+
+type GraphResponse = {
+  nodes: Array<{ id: string; label: string; type?: string; group?: number; filePath?: string }>;
+  links: Array<{ source: string; target: string; type?: string }>;
+};
+
+function shouldUseLocalLLM(): boolean {
+  const provider = (process.env.LLM_PROVIDER || 'gemini').toLowerCase();
+  return provider !== 'gemini';
+}
+
+async function generateDependencyMapWithLLM(userQuery: string, panel: vscode.WebviewPanel): Promise<GraphResponse | null> {
+  try {
+    if (!shouldUseLocalLLM()) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Local LLM disabled. Using backend for map.' });
+      return null;
+    }
+    const lmNamespace: any = (vscode as any).lm;
+    if (!lmNamespace || typeof lmNamespace.selectChatModels !== 'function') {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Local LLM API not available. Using backend for map.' });
+      return null;
+    }
+
+    const models = await lmNamespace.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
+    if (!models || models.length === 0) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ No Copilot models available. Using backend for map.' });
+      return null;
+    }
+
+    const model = models[0];
+    const codebaseContext = await collectCodebaseContext();
+    const prompt = `You are generating a rich dependency map for a codebase.
+Return ONLY valid JSON with this exact shape:
+{
+  "nodes": [{"id":"string","label":"string","type":"string","group":1,"filePath":"string"}],
+  "links": [{"source":"string","target":"string","type":"string"}]
+}
+
+Use group=1 for entry points, group=2 for core/domain, group=3 for data/storage, group=4 for infrastructure/utility.
+Use node type values like "module", "class", "function".
+Use edge type values like "import", "call", "data".
+Target 80-200 nodes and 120-300 links. Include multiple layers and meaningful connections.
+Use workspace-relative file paths when possible. Do not include markdown or code fences.
+
+Context:
+${codebaseContext}
+
+User focus (optional): ${userQuery}`;
+
+    const messages = [vscode.LanguageModelChatMessage.User(prompt)];
+    const cts = new vscode.CancellationTokenSource();
+    const response = await model.sendRequest(messages, {}, cts.token);
+
+    let full = '';
+    for await (const chunk of response.text) {
+      full += chunk;
+    }
+
+    const jsonText = extractJsonBlock(full);
+    if (!jsonText) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Copilot did not return JSON for the map. Using backend.' });
+      return null;
+    }
+
+    const parsed = JSON.parse(jsonText) as GraphResponse;
+    if (!parsed || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.links)) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Copilot returned invalid map format. Using backend.' });
+      return null;
+    }
+
+    return parsed;
+  } catch (err: any) {
+    panel.webview.postMessage({ command: 'llmResponse', text: `⚠️ Copilot map failed: ${err?.message ?? String(err)}. Using backend.` });
+    return null;
+  }
+}
+
+async function generateDiagramWithLLM(diagramType: string, userQuery: string, panel: vscode.WebviewPanel): Promise<string | null> {
+  try {
+    if (!shouldUseLocalLLM()) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Local LLM disabled for diagram generation.' });
+      return null;
+    }
+    const lmNamespace: any = (vscode as any).lm;
+    if (!lmNamespace || typeof lmNamespace.selectChatModels !== 'function') {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Local LLM API not available for diagram generation.' });
+      return null;
+    }
+
+    const models = await lmNamespace.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
+    if (!models || models.length === 0) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ No Copilot models available for diagram generation.' });
+      return null;
+    }
+
+    const codebaseContext = await collectCodebaseContext();
+    const normalized = String(diagramType).toLowerCase();
+    const diagramInstruction = normalized === 'component'
+      ? 'Use Mermaid C4 component diagram (C4Component) to show components and relationships.'
+      : normalized === 'uml'
+        ? 'Use Mermaid classDiagram to show key classes/modules and relationships.'
+        : 'Use Mermaid flowchart to show the main execution/flow.';
+
+    const prompt = `You are generating a diagram for a codebase.
+${diagramInstruction}
+
+Return ONLY Mermaid markup. Do not include markdown fences or explanations.
+Focus on the most important 12-25 nodes and relationships.
+
+Context:
+${codebaseContext}
+
+User focus (optional): ${userQuery}`;
+
+    const messages = [vscode.LanguageModelChatMessage.User(prompt)];
+    const cts = new vscode.CancellationTokenSource();
+    const response = await models[0].sendRequest(messages, {}, cts.token);
+
+    let full = '';
+    for await (const chunk of response.text) {
+      full += chunk;
+    }
+
+    const mermaidText = extractMermaidBlock(full);
+    if (!mermaidText) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Copilot did not return Mermaid text.' });
+      return null;
+    }
+
+    return mermaidText;
+  } catch (err: any) {
+    panel.webview.postMessage({ command: 'llmResponse', text: `⚠️ Diagram generation failed: ${err?.message ?? String(err)}` });
+    return null;
+  }
+}
+
+function extractJsonBlock(text: string): string | null {
+  if (!text) return null;
+  const fencedJson = text.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (fencedJson && fencedJson[1]) return fencedJson[1].trim();
+
+  const fenced = text.match(/```\s*([\s\S]*?)\s*```/i);
+  if (fenced && fenced[1]) return fenced[1].trim();
+
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return text.slice(firstBrace, lastBrace + 1).trim();
+  }
+  return null;
+}
+
+function extractMermaidBlock(text: string): string | null {
+  if (!text) return null;
+  const fenced = text.match(/```\s*([\s\S]*?)\s*```/i);
+  if (fenced && fenced[1]) return fenced[1].trim();
+
+  return text.trim();
 }
 
 function formatAIResponse(data: any, task: string): string {
@@ -377,6 +561,7 @@ function getWebviewContent(panel: vscode.WebviewPanel): string {
   .main{padding:12px;display:flex;flex-direction:column;gap:12px;height:100%;}
   #graphCard{flex:1;display:flex;flex-direction:column;gap:12px;padding:12px;}
   #graph{flex:1;border-radius:10px;border:1px solid rgba(255,255,255,0.03); background: linear-gradient(180deg, rgba(0,0,0,0.25), rgba(255,255,255,0.01));overflow:hidden;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);font-size:14px;}
+  #diagram{flex:1;border-radius:10px;border:1px solid rgba(255,255,255,0.03); background: linear-gradient(180deg, rgba(0,0,0,0.25), rgba(255,255,255,0.01));overflow:auto;padding:8px;color:rgba(255,255,255,0.9);}
   .rightPanel{display:flex;flex-direction:column;gap:12px;}
   .prompt{padding:12px;display:flex;flex-direction:column;gap:10px;}
   textarea#searchInput{width:100%;min-height:120px;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00));color:var(--vscode-input-foreground);resize:vertical;font-family:monospace;font-size:13px;}
@@ -431,13 +616,47 @@ function getWebviewContent(panel: vscode.WebviewPanel): string {
 
       <div id="graphCard" class="main">
         <div id="graph">Click <strong>Map</strong> to fetch and render the dependency map.</div>
+        <div id="diagram" style="display:none;"></div>
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div class="legend">
             <div><span class="swatch" style="background:var(--accent)"></span> Entry</div>
             <div><span class="swatch" style="background:var(--accent-2)"></span> Core</div>
+            <div><span class="swatch" style="background:#34D399"></span> Data</div>
             <div><span class="swatch" style="background:#FFA94D"></span> Infra</div>
           </div>
           <div class="small">Nodes: <span id="nodeCount">0</span> • Edges: <span id="edgeCount">0</span></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div class="small" style="font-weight:700;opacity:0.8;">Filters</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <label class="small"><input type="checkbox" class="filter-layer" value="1" checked> Entry</label>
+            <label class="small"><input type="checkbox" class="filter-layer" value="2" checked> Core</label>
+            <label class="small"><input type="checkbox" class="filter-layer" value="3" checked> Data</label>
+            <label class="small"><input type="checkbox" class="filter-layer" value="4" checked> Infra</label>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <label class="small"><input type="checkbox" class="filter-edge" value="import" checked> import</label>
+            <label class="small"><input type="checkbox" class="filter-edge" value="call" checked> call</label>
+            <label class="small"><input type="checkbox" class="filter-edge" value="data" checked> data</label>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div class="small" style="font-weight:700;opacity:0.8;">Graph Tools</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <label class="small">Depth <input id="depthRange" type="range" min="1" max="5" value="2"/></label>
+            <label class="small"><input id="focusToggle" type="checkbox"/> Focus mode</label>
+            <label class="small"><input id="layoutToggle" type="checkbox"/> Layered layout</label>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <label class="small">Diagram
+              <select id="diagramType" style="margin-left:6px;">
+                <option value="graph">Dependency graph</option>
+                <option value="flowchart">Flowchart</option>
+                <option value="component">Component diagram</option>
+                <option value="uml">UML class diagram</option>
+              </select>
+            </label>
+          </div>
         </div>
       </div>
     </div>
@@ -468,6 +687,7 @@ function getWebviewContent(panel: vscode.WebviewPanel): string {
 
   <!-- vis-network CDN (quick prototype) -->
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 
   <script>
     const vscode = acquireVsCodeApi();
@@ -478,14 +698,36 @@ function getWebviewContent(panel: vscode.WebviewPanel): string {
     const btnSearch = document.getElementById('btnSearch');
     const btnAnalyze = document.getElementById('btnAnalyze');
     const btnImpact = document.getElementById('btnImpact');
+    const depthRange = document.getElementById('depthRange');
+    const focusToggle = document.getElementById('focusToggle');
+    const layoutToggle = document.getElementById('layoutToggle');
+    const diagramType = document.getElementById('diagramType');
+    const graphContainer = document.getElementById('graph');
+    const diagramContainer = document.getElementById('diagram');
+
+    if (window.mermaid) {
+      mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+    }
 
     btnGraph?.addEventListener('click', () => {
-      setGraphStatus('📡 Generating dependency map...');
-      vscode.postMessage({ command: 'map', text: null });
+      const mode = diagramType?.value || 'graph';
+      if (mode === 'graph') {
+        showGraph();
+        setGraphStatus('📡 Generating dependency map...');
+        vscode.postMessage({ command: 'map', text: null });
+      } else {
+        showDiagram();
+        setDiagramStatus('📡 Generating diagram...');
+        vscode.postMessage({ command: 'diagram', diagramType: mode, text: null });
+      }
     });
 
     btnFit?.addEventListener('click', () => {
       if (network) network.fit();
+    });
+
+    layoutToggle?.addEventListener('change', () => {
+      applyLayout();
     });
 
     btnExport?.addEventListener('click', () => {
@@ -523,12 +765,22 @@ function getWebviewContent(panel: vscode.WebviewPanel): string {
 
     // Helpers
     function setGraphStatus(msg) {
-      const g = document.getElementById('graph');
-      g.innerHTML = '<div style="opacity:.9;">' + msg + '</div>';
+      graphContainer.innerHTML = '<div style="opacity:.9;">' + msg + '</div>';
+    }
+    function setDiagramStatus(msg) {
+      diagramContainer.innerHTML = '<div style="opacity:.9;">' + msg + '</div>';
     }
     function setResultsHtml(html) {
       const el = document.getElementById('results');
       el.innerHTML = html;
+    }
+    function showGraph() {
+      graphContainer.style.display = 'flex';
+      diagramContainer.style.display = 'none';
+    }
+    function showDiagram() {
+      graphContainer.style.display = 'none';
+      diagramContainer.style.display = 'block';
     }
 
     // Networking from extension -> webview
@@ -536,6 +788,11 @@ function getWebviewContent(panel: vscode.WebviewPanel): string {
     let nodesDS = null;
     let edgesDS = null;
     let lastGraph = null;
+    let fullNodes = [];
+    let fullEdges = [];
+    let focusEnabled = false;
+    let focusHops = 2;
+    let focusNodeId = null;
 
     window.addEventListener('message', event => {
       const m = event.data;
@@ -550,8 +807,13 @@ function getWebviewContent(panel: vscode.WebviewPanel): string {
           appendAIChunk(m.text || '');
           break;
         case 'graphData':
+          showGraph();
           lastGraph = m.data;
           renderDependencyGraph(m.data);
+          break;
+        case 'diagramData':
+          showDiagram();
+          renderMermaidDiagram(m.diagram || '');
           break;
       }
     });
@@ -597,8 +859,7 @@ function getWebviewContent(panel: vscode.WebviewPanel): string {
     }
 
     function renderDependencyGraph(graphPayload) {
-      const container = document.getElementById('graph');
-      container.innerHTML = '';
+      graphContainer.innerHTML = '';
 
       const nodes = (graphPayload.nodes || []).map(n => ({
         id: n.id,
@@ -616,15 +877,11 @@ function getWebviewContent(panel: vscode.WebviewPanel): string {
         title: e.type || 'import'
       }));
 
-      nodesDS = new vis.DataSet(nodes.map(n => ({
-        id: n.id,
-        label: n.label,
-        title: n.title,
-        group: n.group,
-        filePath: n.filePath
-      })));
+      fullNodes = nodes;
+      fullEdges = edges;
 
-      edgesDS = new vis.DataSet(edges);
+      nodesDS = new vis.DataSet([]);
+      edgesDS = new vis.DataSet([]);
 
       const data = { nodes: nodesDS, edges: edgesDS };
       const options = {
@@ -644,17 +901,29 @@ function getWebviewContent(panel: vscode.WebviewPanel): string {
         groups: {
           1: { color: { background: '#00E6C3', border: '#00E6C3' }, font: { color: '#001018' } },
           2: { color: { background: '#7C5CFF', border: '#7C5CFF' }, font: { color: '#fff' } },
-          3: { color: { background: '#FFA94D', border: '#FFA94D' }, font: { color: '#001018' } }
+          3: { color: { background: '#34D399', border: '#34D399' }, font: { color: '#001018' } },
+          4: { color: { background: '#FFA94D', border: '#FFA94D' }, font: { color: '#001018' } }
         }
       };
 
-      network = new vis.Network(container, data, options);
+      network = new vis.Network(graphContainer, data, options);
+
+      applyFilters();
 
       // Update counts
-      document.getElementById('nodeCount').textContent = (nodes.length).toString();
-      document.getElementById('edgeCount').textContent = (edges.length).toString();
+      updateCounts();
 
       network.on('click', params => {
+        if (!params.nodes || params.nodes.length === 0) return;
+        const nodeId = params.nodes[0];
+        if (focusEnabled) {
+          focusNodeId = nodeId;
+          applyFilters();
+          return;
+        }
+      });
+
+      network.on('doubleClick', params => {
         if (!params.nodes || params.nodes.length === 0) return;
         const nodeId = params.nodes[0];
         const node = (graphPayload.nodes || []).find(n => n.id === nodeId);
@@ -666,6 +935,133 @@ function getWebviewContent(panel: vscode.WebviewPanel): string {
       setTimeout(() => {
         container.style.opacity = '1';
       }, 120);
+    }
+
+    function getSelectedValues(selector) {
+      return Array.from(document.querySelectorAll(selector))
+        .filter(el => el.checked)
+        .map(el => el.value);
+    }
+
+    function applyFilters() {
+      if (!nodesDS || !edgesDS) return;
+      const allowedGroups = new Set(getSelectedValues('.filter-layer').map(v => parseInt(v, 10)));
+      const allowedEdgeTypes = new Set(getSelectedValues('.filter-edge'));
+
+      let filteredNodes = fullNodes.filter(n => allowedGroups.has(n.group || 0));
+      let filteredEdges = fullEdges.filter(e => {
+        const edgeType = (e.title || 'import').toLowerCase();
+        return allowedEdgeTypes.has(edgeType);
+      });
+
+      if (focusEnabled && focusNodeId) {
+        const neighborIds = getNeighborhood(focusNodeId, focusHops, filteredEdges);
+        filteredNodes = filteredNodes.filter(n => neighborIds.has(n.id));
+        const nodeIds = new Set(filteredNodes.map(n => n.id));
+        filteredEdges = filteredEdges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to));
+      } else {
+        const nodeIds = new Set(filteredNodes.map(n => n.id));
+        filteredEdges = filteredEdges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to));
+      }
+
+      nodesDS.clear();
+      edgesDS.clear();
+      nodesDS.add(filteredNodes.map(n => ({
+        id: n.id,
+        label: n.label,
+        title: n.title,
+        group: n.group,
+        filePath: n.filePath
+      })));
+      edgesDS.add(filteredEdges);
+      updateCounts();
+    }
+
+    function updateCounts() {
+      if (!nodesDS || !edgesDS) return;
+      document.getElementById('nodeCount').textContent = nodesDS.length.toString();
+      document.getElementById('edgeCount').textContent = edgesDS.length.toString();
+    }
+
+    function hookFilterControls() {
+      const layerInputs = document.querySelectorAll('.filter-layer');
+      const edgeInputs = document.querySelectorAll('.filter-edge');
+      layerInputs.forEach(i => i.addEventListener('change', applyFilters));
+      edgeInputs.forEach(i => i.addEventListener('change', applyFilters));
+      depthRange?.addEventListener('input', () => {
+        focusHops = parseInt(depthRange.value, 10);
+        applyFilters();
+      });
+      focusToggle?.addEventListener('change', () => {
+        focusEnabled = !!focusToggle.checked;
+        if (!focusEnabled) focusNodeId = null;
+        applyFilters();
+      });
+    }
+
+    hookFilterControls();
+
+    function getNeighborhood(startId, hops, edges) {
+      const adj = new Map();
+      edges.forEach(e => {
+        if (!adj.has(e.from)) adj.set(e.from, new Set());
+        if (!adj.has(e.to)) adj.set(e.to, new Set());
+        adj.get(e.from).add(e.to);
+        adj.get(e.to).add(e.from);
+      });
+
+      const visited = new Set([startId]);
+      let frontier = new Set([startId]);
+
+      for (let i = 0; i < hops; i++) {
+        const next = new Set();
+        frontier.forEach(id => {
+          const neighbors = adj.get(id) || new Set();
+          neighbors.forEach(n => {
+            if (!visited.has(n)) {
+              visited.add(n);
+              next.add(n);
+            }
+          });
+        });
+        frontier = next;
+      }
+
+      return visited;
+    }
+
+    function applyLayout() {
+      if (!network) return;
+      const layered = !!layoutToggle?.checked;
+      if (layered) {
+        network.setOptions({
+          layout: { hierarchical: { enabled: true, direction: 'LR', sortMethod: 'directed' } },
+          physics: { enabled: false }
+        });
+      } else {
+        network.setOptions({
+          layout: { hierarchical: { enabled: false } },
+          physics: { enabled: true, barnesHut: { gravitationalConstant: -20000 } }
+        });
+      }
+    }
+
+    function renderMermaidDiagram(text) {
+      if (!text) {
+        setDiagramStatus('No diagram data returned.');
+        return;
+      }
+      diagramContainer.innerHTML = '';
+      const id = 'mermaid-' + Date.now();
+      if (window.mermaid) {
+        mermaid.render(id, text).then(res => {
+          diagramContainer.innerHTML = res.svg;
+        }).catch(err => {
+          diagramContainer.innerHTML = '<div style="opacity:.9;">Failed to render diagram: ' + err.message + '</div>';
+        });
+      } else {
+        diagramContainer.textContent = text;
+      }
     }
   </script>
 </body>

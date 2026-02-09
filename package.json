@@ -1,25 +1,33 @@
 {
     "name": "codebasegps",
     "displayName": "codebaseGPS",
+    "publisher": "codebaseGPS",
     "description": "A VS Code extension that acts as you're guide in any project(either large, foreign, new, legacy, complicated). Helps you understand code easily, lookup activities & supports NL interaction.",
     "version": "0.0.1",
-    "engines": {
+    "engines": 
+    {
         "vscode": "^1.109.0"
     },
-    "categories": [
+    "categories": 
+    [
         "Other"
     ],
-    "activationEvents": [],
+    "activationEvents": 
+    [
+    ],
     "main": "./out/extension.js",
-    "contributes": {
-        "commands": [
+    "contributes": 
+    {
+        "commands": 
+        [
             {
                 "command": "codebasegps.helloKenya",
                 "title": "codebaseGPS"
             }
         ]
     },
-    "scripts": {
+    "scripts": 
+    {
         "vscode:prepublish": "npm run compile",
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
@@ -27,7 +35,8 @@
         "lint": "eslint src",
         "test": "vscode-test"
     },
-    "devDependencies": {
+    "devDependencies": 
+    {
         "@types/mocha": "^10.0.10",
         "@types/node": "22.x",
         "@types/vscode": "^1.108.1",
@@ -37,7 +46,8 @@
         "typescript": "^5.9.3",
         "typescript-eslint": "^8.52.0"
     },
-    "dependencies": {
+    "dependencies": 
+    {
         "@google/generative-ai": "^0.24.1"
     }
 }
