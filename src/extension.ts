@@ -174,8 +174,9 @@ export function activate(context: vscode.ExtensionContext) {
                 const doc = await vscode.workspace.openTextDocument(fileUri);
                 await vscode.window.showTextDocument(doc, { preview: false });
               } catch (err) {
+                const errorMessage = err instanceof Error ? err.message : String(err);
                 console.error('Failed to open file:', err);
-                panel.webview.postMessage({ command: 'llmResponse', text: `❌ Failed to open file: ${err?.message ?? String(err)}` });
+                panel.webview.postMessage({ command: 'llmResponse', text: `❌ Failed to open file: ${errorMessage}` });
               }
               break;
             }
