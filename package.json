@@ -4,7 +4,7 @@
     "description": "A VS Code extension that acts as you're guide in any project(either large, foreign, new, legacy, complicated). Helps you understand code easily, lookup activities & supports NL interaction.",
     "version": "0.0.1",
     "engines": {
-        "vscode": "^1.108.2"
+        "vscode": "^1.109.0"
     },
     "categories": [
         "Other"
