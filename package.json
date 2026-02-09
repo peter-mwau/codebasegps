@@ -1,10 +1,22 @@
 {
     "name": "codebasegps",
     "displayName": "codebaseGPS",
+    "publisher": "codebaseGPS",
+    "repository": 
+    {
+        "type": "git",
+        "url": "https://github.com/peter-mwau/codebasegps.git"
+    },
     "description": "A VS Code extension that acts as you're guide in any project(either large, foreign, new, legacy, complicated). Helps you understand code easily, lookup activities & supports NL interaction.",
     "version": "0.0.1",
+<<<<<<< HEAD
+    "engines": 
+    {
+        "vscode": "^1.109.0"
+=======
     "engines": {
         "vscode": "^1.108.2"
+>>>>>>> 9e43cbc582c0c08a03fb51da5e76935376424b3d
     },
     "categories": [
         "Other"
@@ -27,7 +39,12 @@
         "lint": "eslint src",
         "test": "vscode-test"
     },
+<<<<<<< HEAD
+    "devDependencies": 
+    {
+=======
     "devDependencies": {
+>>>>>>> 9e43cbc582c0c08a03fb51da5e76935376424b3d
         "@types/mocha": "^10.0.10",
         "@types/node": "22.x",
         "@types/vscode": "^1.108.1",
@@ -37,7 +54,12 @@
         "typescript": "^5.9.3",
         "typescript-eslint": "^8.52.0"
     },
+<<<<<<< HEAD
+    "dependencies": 
+    {
+=======
     "dependencies": {
+>>>>>>> 9e43cbc582c0c08a03fb51da5e76935376424b3d
         "@google/generative-ai": "^0.24.1"
     }
 }

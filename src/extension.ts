@@ -1,433 +1,1074 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
+// codebasegps/src/extension.ts
 import * as vscode from 'vscode';
+import * as path from 'path';
 
-const BACKEND_URL = 'https://922d-41-90-172-34.ngrok-free.app';
-// This method is called when your extension is activated
-// Your extension is activated the very first time the command is executed
+declare const require: any; // allow conditional require for node-fetch fallback
+
+// Use env BACKEND_URL if set, otherwise fallback to hosted backend
+const BACKEND_URL = process.env.BACKEND_URL || 'https://codebasegpsservice-production.up.railway.app';
+
 export function activate(context: vscode.ExtensionContext) {
+  console.log('Congratulations, your extension "codebasegps" is now active!');
 
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "codebasegps" is now active!');
+  const disposable = vscode.commands.registerCommand('codebasegps.helloKenya', async () => {
+    const panel = vscode.window.createWebviewPanel(
+      'codebasegps',
+      'codebaseGPS',
+      vscode.ViewColumn.One,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true
+      }
+    );
 
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with registerCommand
-	// The commandId parameter must match the command field in package.json
-	const disposable = vscode.commands.registerCommand('codebasegps.helloKenya', async () => {
-		// The code you place here will be executed every time your command is executed
-		// Display a message box to the user
-		// vscode.window.showInformationMessage('Hello Kenya from codebaseGPS!! Yes Buddy!');
+    // Provide HTML for the webview (includes vis-network for graph rendering)
+    panel.webview.html = getWebviewContent(panel);
 
-		const panel = vscode.window.createWebviewPanel(
-			'codebasegps', // Identifies the type of the webview. Used internally
-			'codebaseGPS', // Title of the panel displayed to the user
-			vscode.ViewColumn.One, // Editor column to show the new webview panel in.
-			{
-				enableScripts: true
-			} // Webview options. More on these later.
-		);
+    // Handle messages from the webview
+    panel.webview.onDidReceiveMessage(
+      async (message) => {
+        try {
+          switch (message.command) {
+            case 'search': {
+              const results = await analyzeCodebase(message.text);
+              panel.webview.postMessage({ command: 'searchResults', results });
+              break;
+            }
 
-		// And set its HTML content
-		panel.webview.html = getWebviewContent();
+            case 'analyzeWithLLM': {
+              await analyzeWithLLM(message.text, panel);
+              break;
+            }
 
-		// Listen for messages from the webview
-		panel.webview.onDidReceiveMessage(
-			async message => {
-				switch (message.command) {
-					case 'search':
-						const results = await analyzeCodebase(message.text);
-						panel.webview.postMessage({ command: 'searchResults', results });
-						break;
-					case 'analyzeWithLLM':
-						await analyzeWithLLM(message.text, panel);
-						break;
-				}
-			},
-			undefined,
-			context.subscriptions
-		);
+            case 'map': {
+              panel.webview.postMessage({ command: 'llmResponse', text: '📡 Generating dependency map...' });
 
-		function getWebviewContent() {
-			return `<!DOCTYPE html>
-			<html lang="en">
-			<head>
-				<meta charset="UTF-8">
-				<meta name="viewport" content="width=device-width, initial-scale=1.0">
-				<title>codebaseGPS</title>
-				<style>
-					:root {
-						color-scheme: light dark;
-					}
-					body { 
-						padding: 16px; 
-						font-family: var(--vscode-font-family);
-						color: var(--vscode-foreground);
-						background: var(--vscode-editor-background);
-					}
-					.app-header {
-						display: flex;
-						align-items: baseline;
-						gap: 10px;
-						margin-bottom: 12px;
-						padding: 10px 12px;
-						border: 1px solid var(--vscode-panel-border);
-						border-radius: 8px;
-						background: var(--vscode-sideBarSectionHeader-background);
-					}
-					.app-title {
-						font-size: 16px;
-						font-weight: 700;
-					}
-					.app-subtitle {
-						font-size: 12px;
-						opacity: 0.8;
-					}
-					.app {
-						display: grid;
-						grid-template-columns: 2fr 1fr;
-						gap: 16px;
-						height: calc(100vh - 32px);
-					}
-					.panel {
-						display: flex;
-						flex-direction: column;
-						border: 1px solid var(--vscode-panel-border);
-						border-radius: 8px;
-						background: var(--vscode-sideBar-background);
-						overflow: hidden;
-					}
-					.panel-header {
-						padding: 12px 14px;
-						font-weight: 600;
-						border-bottom: 1px solid var(--vscode-panel-border);
-						background: var(--vscode-sideBarSectionHeader-background);
-					}
-					.panel-body {
-						padding: 14px;
-						overflow: auto;
-						flex: 1;
-					}
-					#results {
-						height: 100%;
-					}
-					.file-result {
-						margin: 10px 0;
-						padding: 10px;
-						background: var(--vscode-editor-background);
-						border-left: 3px solid var(--vscode-textLink-foreground);
-						border-radius: 4px;
-					}
-					.llm-response {
-						padding: 14px;
-						background: var(--vscode-editor-background);
-						border: 1px solid var(--vscode-panel-border);
-						border-radius: 6px;
-						white-space: pre-wrap;
-						line-height: 1.6;
-					}
-					.composer {
-						display: flex;
-						flex-direction: column;
-						gap: 12px;
-					}
-					.composer-input {
-						display: flex;
-						align-items: center;
-						gap: 8px;
-						padding: 10px 12px;
-						border-radius: 10px;
-						background: var(--vscode-input-background);
-						border: 1px solid var(--vscode-input-border);
-						box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-					}
-					textarea {
-						flex: 1;
-						min-height: 120px;
-						resize: vertical;
-						background: transparent;
-						color: var(--vscode-input-foreground);
-						border: none;
-						outline: none;
-						font-family: var(--vscode-font-family);
-						font-size: 13px;
-						line-height: 1.5;
-					}
-					.button-group {
-						display: flex;
-						gap: 8px;
-					}
-					button {
-						padding: 8px 12px;
-						background: var(--vscode-button-background);
-						color: var(--vscode-button-foreground);
-						border: none;
-						cursor: pointer;
-						border-radius: 6px;
-					}
-					button:hover {
-						background: var(--vscode-button-hoverBackground);
-					}
-					.secondary {
-						background: var(--vscode-button-secondaryBackground);
-						color: var(--vscode-button-secondaryForeground);
-					}
-					.secondary:hover {
-						background: var(--vscode-button-secondaryHoverBackground);
-					}
-				</style>
-				<script>
-					const vscode = acquireVsCodeApi();
-					
-					function searchCodebase() {
-						const searchText = document.getElementById('searchInput').value;
-						if (searchText) {
-							document.getElementById('results').innerHTML = '<p>Searching...</p>';
-							vscode.postMessage({ command: 'search', text: searchText });
-						}
-					}
-				
-					function analyzeWithAI() {
-						const searchText = document.getElementById('searchInput').value;
-						if (searchText) {
-							document.getElementById('results').innerHTML = '<p>🤖 Analyzing codebase with AI...</p>';
-							vscode.postMessage({ command: 'analyzeWithLLM', text: searchText });
-						}
-					}
-					
-					window.addEventListener('message', event => {
-						const message = event.data;
-						switch (message.command) {
-							case 'searchResults':
-								const resultsDiv = document.getElementById('results');
-								if (message.results.length === 0) {
-									resultsDiv.innerHTML = '<p>No results found.</p>';
-								} else {
-									resultsDiv.innerHTML = '<h3>Found in ' + message.results.length + ' file(s):</h3>';
-									message.results.forEach(result => {
-										const div = document.createElement('div');
-										div.className = 'file-result';
-										div.innerHTML = '<strong>' + result.file + '</strong><br>Matches: ' + result.matchCount;
-										resultsDiv.appendChild(div);
-									});
-								}
-								break;
-							case 'llmResponse':
-								const resultsDiv2 = document.getElementById('results');
-								resultsDiv2.innerHTML = '<div class="llm-response">' + message.text + '</div>';
-								break;
-							case 'llmChunk':
-								const existingResponse = document.querySelector('.llm-response');
-								if (existingResponse) {
-									existingResponse.textContent += message.text;
-								}
-								break;
-						}
-					});
-				</script>
-			</head>
-			<body>
-				<div class="app-header">
-					<div class="app-title">codebaseGPS</div>
-					<div class="app-subtitle">AI codebase assistant</div>
-				</div>
-				<div class="app">
-					<div class="panel">
-						<div class="panel-header">Codebase Analysis</div>
-						<div class="panel-body">
-							<div id="results">Use the prompt panel to search or analyze your codebase.</div>
-						</div>
-					</div>
-					<div class="panel">
-						<div class="panel-header">Prompt Panel</div>
-						<div class="panel-body">
-							<div class="composer">
-								<div class="composer-input">
-									<textarea id="searchInput" placeholder="Ask anything about your codebase..."></textarea>
-								</div>
-								<div class="button-group">
-									<button class="secondary" onclick="searchCodebase()">🔍 Search</button>
-									<button onclick="analyzeWithAI()">🤖 AI Analyze</button>
-								</div>
-								<p style="opacity: 0.8; font-size: 12px; margin: 4px 0 0;">Tip: Try “Which file should I edit to render the wallet balance?”</p>
-							</div>
-						</div>
-					</div>
-				</div>
-			</body>
-			</html>`;
-		}
-	});
+              if (shouldUseLocalLLM()) {
+                const llmGraph = await generateDependencyMapWithLLM(message.text ?? '', panel);
+                if (llmGraph) {
+                  panel.webview.postMessage({ command: 'graphData', data: llmGraph });
+                  break;
+                }
+              }
 
-	context.subscriptions.push(disposable);
+              // Fallback to backend if LLM is not available or fails
+              const codebaseContext = await collectCodebaseContext();
+
+              let _fetch: any = (globalThis as any).fetch;
+              if (typeof _fetch === 'undefined') {
+                try {
+                  _fetch = require('node-fetch');
+                } catch (err) {
+                  panel.webview.postMessage({ command: 'llmResponse', text: '❌ fetch not available. Install node-fetch as fallback.' });
+                  break;
+                }
+              }
+
+              try {
+                const resp = await _fetch(`${BACKEND_URL}/gps/query`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    task: 'map',
+                    context: codebaseContext,
+                    query: message.text ?? ""
+                  })
+                });
+
+                if (!resp.ok) {
+                  const t = await resp.text();
+                  panel.webview.postMessage({ command: 'llmResponse', text: `❌ Backend error: ${resp.status} ${t}` });
+                  break;
+                }
+
+                const json = await resp.json();
+                if (json.status === 'success' && json.data) {
+                  panel.webview.postMessage({ command: 'graphData', data: json.data });
+                } else {
+                  panel.webview.postMessage({ command: 'llmResponse', text: `❌ Backend returned unexpected: ${JSON.stringify(json)}` });
+                }
+              } catch (err: any) {
+                panel.webview.postMessage({ command: 'llmResponse', text: `❌ Fetch error: ${err?.message ?? String(err)}` });
+              }
+
+              break;
+            }
+
+            case 'diagram': {
+              panel.webview.postMessage({ command: 'llmResponse', text: '📡 Generating diagram...' });
+
+              if (shouldUseLocalLLM()) {
+                const diagramText = await generateDiagramWithLLM(message.diagramType ?? 'flowchart', message.text ?? '', panel);
+                if (diagramText) {
+                  panel.webview.postMessage({ command: 'diagramData', diagram: diagramText, diagramType: message.diagramType ?? 'flowchart' });
+                  break;
+                }
+              }
+
+              panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Diagram generation via backend is not implemented yet.' });
+              break;
+            }
+
+            case 'impact': {
+              // Run impact analysis on backend
+              panel.webview.postMessage({ command: 'llmResponse', text: '📡 Running impact analysis...' });
+
+              const codebaseContext = await collectCodebaseContext();
+
+              let _fetch: any = (globalThis as any).fetch;
+              if (typeof _fetch === 'undefined') {
+                try {
+                  _fetch = require('node-fetch');
+                } catch (err) {
+                  panel.webview.postMessage({ command: 'llmResponse', text: '❌ fetch not available. Install node-fetch as fallback.' });
+                  break;
+                }
+              }
+
+              try {
+                const resp = await _fetch(`${BACKEND_URL}/gps/query`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    task: 'impact',
+                    context: codebaseContext,
+                    query: message.text ?? ""
+                  })
+                });
+
+                if (!resp.ok) {
+                  const t = await resp.text();
+                  panel.webview.postMessage({ command: 'llmResponse', text: `❌ Backend error: ${resp.status} ${t}` });
+                  break;
+                }
+
+                const json = await resp.json();
+                if (json.status === 'success' && json.data) {
+                  panel.webview.postMessage({ command: 'llmResponse', text: formatAIResponse(json.data, 'impact') });
+                } else {
+                  panel.webview.postMessage({ command: 'llmResponse', text: `❌ Backend returned unexpected: ${JSON.stringify(json)}` });
+                }
+              } catch (err: any) {
+                panel.webview.postMessage({ command: 'llmResponse', text: `❌ Fetch error: ${err?.message ?? String(err)}` });
+              }
+
+              break;
+            }
+
+            case 'openFile': {
+              // Open file in the editor when requested by webview (node click)
+              try {
+                const requestedPath = message.filePath as string;
+                if (!requestedPath) break;
+
+                const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+                let fileUri: vscode.Uri;
+                if (path.isAbsolute(requestedPath)) {
+                  fileUri = vscode.Uri.file(requestedPath);
+                } else if (workspaceFolder) {
+                  fileUri = vscode.Uri.joinPath(workspaceFolder.uri, requestedPath);
+                } else {
+                  fileUri = vscode.Uri.file(requestedPath);
+                }
+
+                const doc = await vscode.workspace.openTextDocument(fileUri);
+                await vscode.window.showTextDocument(doc, { preview: false });
+              } catch (err) {
+                const errorMessage = err instanceof Error ? err.message : String(err);
+                console.error('Failed to open file:', err);
+                panel.webview.postMessage({ command: 'llmResponse', text: `❌ Failed to open file: ${errorMessage}` });
+              }
+              break;
+            }
+
+            default:
+              console.warn('Unknown message from webview:', message);
+          }
+        } catch (err) {
+          console.error('Error handling webview message:', err);
+          panel.webview.postMessage({ command: 'llmResponse', text: `❌ Internal extension error: ${String(err)}` });
+        }
+      },
+      undefined,
+      context.subscriptions
+    );
+  });
+
+  context.subscriptions.push(disposable);
 }
 
-// Function to analyze with LLM(vscode copilot)
+/**
+ * Try VS Code LLM API (Copilot) first; fallback to remote backend search if not available.
+ */
 async function analyzeWithLLM(userQuery: string, panel: vscode.WebviewPanel) {
-	try {
-		// Get GitHub Copilot models
-		const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
-		
-		if (models.length === 0) {
-			panel.webview.postMessage({ 
-				command: 'llmResponse', 
-				text: '⚠️ GitHub Copilot is not available. Please ensure you have GitHub Copilot enabled in VS Code.' 
-			});
-			return;
-		}
+  try {
+    // Show initial message
+    panel.webview.postMessage({ command: 'llmResponse', text: '📡 Connecting to Codebase GPS Brain...' });
 
-		const model = models[0];
+    // Attempt to use VS Code's LLM (if available)
+    const lmNamespace: any = (vscode as any).lm;
+    if (lmNamespace && typeof lmNamespace.selectChatModels === 'function') {
+      if (!shouldUseLocalLLM()) {
+        panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Local LLM disabled. Using backend instead.' });
+      } else {
+      try {
+        const models = await lmNamespace.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
+        if (models && models.length > 0) {
+          const model = models[0];
+          const codebaseContext = await collectCodebaseContext();
 
-		// Collect codebase context
-		const codebaseContext = await collectCodebaseContext();
-
-		// Create messages for the LLM
-		const messages = [
-			vscode.LanguageModelChatMessage.User(
-				`You are a helpful code assistant analyzing a codebase. Here's the project structure and file contents:
+          const messages = [
+            vscode.LanguageModelChatMessage.User(`You are a helpful code assistant analyzing a codebase. Here's the project structure and file contents:
 
 ${codebaseContext}
 
 User question: ${userQuery}
 
-Provide a helpful, specific answer with file paths and line numbers when relevant. Be concise but thorough.`
-			)
-		];
+Provide a helpful, specific answer with file paths and line numbers when relevant. Be concise but thorough.`)
+          ];
 
-		// Send request and stream response
-		const response = await model.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
-		
-		let fullResponse = '';
-		panel.webview.postMessage({ command: 'llmResponse', text: '' });
-		
-		for await (const chunk of response.text) {
-			fullResponse += chunk;
-			panel.webview.postMessage({ command: 'llmChunk', text: chunk });
-		}
+          const cts = new vscode.CancellationTokenSource();
+          const response = await model.sendRequest(messages, {}, cts.token);
 
-	} catch (error: any) {
-		panel.webview.postMessage({ 
-			command: 'llmResponse', 
-			text: `❌ Error: ${error.message}` 
-		});
-	}
-}
-
-// async function analyzeWithLLM(userQuery: string, panel: vscode.WebviewPanel) {
-//     try {
-//         panel.webview.postMessage({ command: 'llmResponse', text: '📡 Connecting to Codebase GPS Brain...' });
-
-//         // 1. Collect full codebase context (no more 500-char limit!)
-//         const codebaseContext = await collectCodebaseContext();
-
-//         // 2. Prepare the payload for your FastAPI Dispatcher
-//         const payload = {
-//             task: "search", // Or "impact" depending on your UI logic
-//             context: codebaseContext,
-//             query: userQuery
-//         };
-
-//         // 3. Call your FastAPI Backend
-//         const response = await fetch(`${BACKEND_URL}/gps/query`, {
-//             method: 'POST',
-//             headers: { 'Content-Type': 'application/json' },
-//             body: JSON.stringify(payload)
-//         });
-
-//         if (!response.ok) {
-//             throw new Error(`Backend returned ${response.status}: ${await response.text()}`);
-//         }
-
-//         const result = await response.json() as { status: string; data: any };
-
-//         // 4. Handle the Response (Your FastAPI returns { status, data, task })
-//         if (result.status === 'success') {
-//             // If it's the search/impact task, it returns a structured string or JSON
-//             const formattedResponse = formatAIResponse(result.data, payload.task);
-//             panel.webview.postMessage({ command: 'llmResponse', text: formattedResponse });
-//         }
-
-//     } catch (error: any) {
-//         panel.webview.postMessage({ 
-//             command: 'llmResponse', 
-//             text: `❌ Backend Error: ${error.message}. Make sure ngrok is running!` 
-//         });
-//     }
-// }
-
-// Helper to turn JSON data from your Backend into nice Markdown for the Webview
-function formatAIResponse(data: any, task: string): string {
-    if (task === 'impact') {
-        return `### ⚠️ Risk Score: ${data.risk_score}/10\n\n**Analysis:** ${data.explanation}\n\n**Affected Files:**\n${data.affected_modules.join('\n')}`;
+          panel.webview.postMessage({ command: 'llmResponse', text: '' });
+          let full = '';
+          for await (const chunk of response.text) {
+            full += chunk;
+            panel.webview.postMessage({ command: 'llmChunk', text: chunk });
+          }
+          return;
+        } else {
+          panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ No local LLM models available, falling back to backend.' });
+        }
+      } catch (err) {
+        // If any error using the local LLM API, silently fall back to backend path below
+        console.warn('Local LLM API failed, falling back to backend', err);
+      }
+      }
+    } else {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Local LLM API not available in this VS Code. Using backend instead.' });
     }
-    // Default for search
-    return data.summary || JSON.stringify(data, null, 2);
+
+    // Backend fallback
+    const codebaseContext = await collectCodebaseContext();
+
+    let _fetch: any = (globalThis as any).fetch;
+    if (typeof _fetch === 'undefined') {
+      try {
+        _fetch = require('node-fetch');
+      } catch (err) {
+        panel.webview.postMessage({ command: 'llmResponse', text: '❌ fetch not available. Install node-fetch as fallback.' });
+        return;
+      }
+    }
+
+    panel.webview.postMessage({ command: 'llmResponse', text: '📡 Calling remote Codebase GPS backend...' });
+
+    const resp = await _fetch(`${BACKEND_URL}/gps/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        task: 'search', // defaulting to search here; UI could allow specifying impact/map
+        context: codebaseContext,
+        query: userQuery
+      })
+    });
+
+    if (!resp.ok) {
+      const t = await resp.text();
+      panel.webview.postMessage({ command: 'llmResponse', text: `❌ Backend error: ${resp.status} ${t}` });
+      return;
+    }
+
+    const json = await resp.json();
+    if (json.status === 'success' && json.data) {
+      const formatted = formatAIResponse(json.data, 'search');
+      panel.webview.postMessage({ command: 'llmResponse', text: formatted });
+    } else {
+      panel.webview.postMessage({ command: 'llmResponse', text: `❌ Backend returned unexpected: ${JSON.stringify(json)}` });
+    }
+  } catch (err: any) {
+    panel.webview.postMessage({ command: 'llmResponse', text: `❌ Error: ${err?.message ?? String(err)}` });
+  }
 }
 
-// Function to collect codebase context
+type GraphResponse = {
+  nodes: Array<{ id: string; label: string; type?: string; group?: number; filePath?: string }>;
+  links: Array<{ source: string; target: string; type?: string }>;
+};
+
+function shouldUseLocalLLM(): boolean {
+  const provider = (process.env.LLM_PROVIDER || 'gemini').toLowerCase();
+  return provider !== 'gemini';
+}
+
+async function generateDependencyMapWithLLM(userQuery: string, panel: vscode.WebviewPanel): Promise<GraphResponse | null> {
+  try {
+    if (!shouldUseLocalLLM()) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Local LLM disabled. Using backend for map.' });
+      return null;
+    }
+    const lmNamespace: any = (vscode as any).lm;
+    if (!lmNamespace || typeof lmNamespace.selectChatModels !== 'function') {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Local LLM API not available. Using backend for map.' });
+      return null;
+    }
+
+    const models = await lmNamespace.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
+    if (!models || models.length === 0) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ No Copilot models available. Using backend for map.' });
+      return null;
+    }
+
+    const model = models[0];
+    const codebaseContext = await collectCodebaseContext();
+    const prompt = `You are generating a rich dependency map for a codebase.
+Return ONLY valid JSON with this exact shape:
+{
+  "nodes": [{"id":"string","label":"string","type":"string","group":1,"filePath":"string"}],
+  "links": [{"source":"string","target":"string","type":"string"}]
+}
+
+Use group=1 for entry points, group=2 for core/domain, group=3 for data/storage, group=4 for infrastructure/utility.
+Use node type values like "module", "class", "function".
+Use edge type values like "import", "call", "data".
+Target 80-200 nodes and 120-300 links. Include multiple layers and meaningful connections.
+Use workspace-relative file paths when possible. Do not include markdown or code fences.
+
+Context:
+${codebaseContext}
+
+User focus (optional): ${userQuery}`;
+
+    const messages = [vscode.LanguageModelChatMessage.User(prompt)];
+    const cts = new vscode.CancellationTokenSource();
+    const response = await model.sendRequest(messages, {}, cts.token);
+
+    let full = '';
+    for await (const chunk of response.text) {
+      full += chunk;
+    }
+
+    const jsonText = extractJsonBlock(full);
+    if (!jsonText) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Copilot did not return JSON for the map. Using backend.' });
+      return null;
+    }
+
+    const parsed = JSON.parse(jsonText) as GraphResponse;
+    if (!parsed || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.links)) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Copilot returned invalid map format. Using backend.' });
+      return null;
+    }
+
+    return parsed;
+  } catch (err: any) {
+    panel.webview.postMessage({ command: 'llmResponse', text: `⚠️ Copilot map failed: ${err?.message ?? String(err)}. Using backend.` });
+    return null;
+  }
+}
+
+async function generateDiagramWithLLM(diagramType: string, userQuery: string, panel: vscode.WebviewPanel): Promise<string | null> {
+  try {
+    if (!shouldUseLocalLLM()) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Local LLM disabled for diagram generation.' });
+      return null;
+    }
+    const lmNamespace: any = (vscode as any).lm;
+    if (!lmNamespace || typeof lmNamespace.selectChatModels !== 'function') {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Local LLM API not available for diagram generation.' });
+      return null;
+    }
+
+    const models = await lmNamespace.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
+    if (!models || models.length === 0) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ No Copilot models available for diagram generation.' });
+      return null;
+    }
+
+    const codebaseContext = await collectCodebaseContext();
+    const normalized = String(diagramType).toLowerCase();
+    const diagramInstruction = normalized === 'component'
+      ? 'Use Mermaid C4 component diagram (C4Component) to show components and relationships.'
+      : normalized === 'uml'
+        ? 'Use Mermaid classDiagram to show key classes/modules and relationships.'
+        : 'Use Mermaid flowchart to show the main execution/flow.';
+
+    const prompt = `You are generating a diagram for a codebase.
+${diagramInstruction}
+
+Return ONLY Mermaid markup. Do not include markdown fences or explanations.
+Focus on the most important 12-25 nodes and relationships.
+
+Context:
+${codebaseContext}
+
+User focus (optional): ${userQuery}`;
+
+    const messages = [vscode.LanguageModelChatMessage.User(prompt)];
+    const cts = new vscode.CancellationTokenSource();
+    const response = await models[0].sendRequest(messages, {}, cts.token);
+
+    let full = '';
+    for await (const chunk of response.text) {
+      full += chunk;
+    }
+
+    const mermaidText = extractMermaidBlock(full);
+    if (!mermaidText) {
+      panel.webview.postMessage({ command: 'llmResponse', text: '⚠️ Copilot did not return Mermaid text.' });
+      return null;
+    }
+
+    return mermaidText;
+  } catch (err: any) {
+    panel.webview.postMessage({ command: 'llmResponse', text: `⚠️ Diagram generation failed: ${err?.message ?? String(err)}` });
+    return null;
+  }
+}
+
+function extractJsonBlock(text: string): string | null {
+  if (!text) return null;
+  const fencedJson = text.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (fencedJson && fencedJson[1]) return fencedJson[1].trim();
+
+  const fenced = text.match(/```\s*([\s\S]*?)\s*```/i);
+  if (fenced && fenced[1]) return fenced[1].trim();
+
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return text.slice(firstBrace, lastBrace + 1).trim();
+  }
+  return null;
+}
+
+function extractMermaidBlock(text: string): string | null {
+  if (!text) return null;
+  const fenced = text.match(/```\s*([\s\S]*?)\s*```/i);
+  if (fenced && fenced[1]) return fenced[1].trim();
+
+  return text.trim();
+}
+
+function formatAIResponse(data: any, task: string): string {
+  if (!data) return 'No data returned.';
+  if (task === 'impact') {
+    return `⚠️ Risk Score: ${data.risk_score}/10\n\nAnalysis:\n${data.explanation}\n\nAffected Files:\n${(data.affected_modules || []).join('\n')}\n\nSuggested Tests:\n${(data.suggested_tests || []).join('\n')}`;
+  }
+  if (data.summary) return data.summary;
+  if (data.results) return JSON.stringify(data.results, null, 2);
+  return JSON.stringify(data, null, 2);
+}
+
+/**
+ * Collect a concise codebase context: previews of up to 50 files, truncated to avoid token explosion.
+ */
 async function collectCodebaseContext(): Promise<string> {
-	const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-	if (!workspaceFolder) {
-		return 'No workspace folder open.';
-	}
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    return 'No workspace folder open.';
+  }
 
-	// Find relevant files (limit to avoid token overflow)
-	const files = await vscode.workspace.findFiles(
-		'**/*.{ts,js,tsx,jsx,py,java,json,md}',
-		'**/node_modules/**',
-		50 // Limit to 50 files
-	);
+  const files = await vscode.workspace.findFiles('**/*.{ts,js,tsx,jsx,py,java,json,md,py}', '**/node_modules/**', 50);
 
-	let context = `Workspace: ${workspaceFolder.name}\n\nFiles:\n`;
-	
-	for (const file of files) {
-		try {
-			const relativePath = vscode.workspace.asRelativePath(file);
-			const content = await vscode.workspace.fs.readFile(file);
-			const text = new TextDecoder().decode(content);
-			
-			// Limit file content to first 500 characters to avoid token overflow
-			const preview = text.slice(0, 500);
-			context += `\n--- ${relativePath} ---\n${preview}${text.length > 500 ? '\n... (truncated)' : ''}\n`;
-		} catch (error) {
-			console.error(`Error reading ${file.fsPath}:`, error);
-		}
-	}
+  let context = `Workspace: ${workspaceFolder.name}\n\nFiles:\n`;
 
-	return context;
+  for (const file of files) {
+    try {
+      const relativePath = vscode.workspace.asRelativePath(file);
+      const content = await vscode.workspace.fs.readFile(file);
+      const text = new TextDecoder().decode(content);
+      const preview = text.slice(0, 500);
+      context += `\n--- ${relativePath} ---\n${preview}${text.length > 500 ? '\n... (truncated)' : ''}\n`;
+    } catch (err) {
+      console.error(`Error reading ${file.fsPath}:`, err);
+    }
+  }
+
+  return context;
 }
 
-// Function to analyze codebase
-async function analyzeCodebase(searchText: string) {
-	const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-	if (!workspaceFolder) {
-		return [];
-	}
+/**
+ * Simple local search through files (used by the Search button in the UI).
+ * Returns array of { file: relativePath, matchCount } sorted by matchCount desc.
+ */
+async function analyzeCodebase(searchText: string): Promise<Array<{ file: string; matchCount: number }>> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) return [];
 
-	// Find all TypeScript and JavaScript files, excluding node_modules
-	const files = await vscode.workspace.findFiles('**/*.{ts,js,java,cpp,md,env,yaml,json,py,tsx,jsx}', '**/node_modules/**');
-	
-	const results = [];
-	for (const file of files) {
-		try {
-			const content = await vscode.workspace.fs.readFile(file);
-			const text = new TextDecoder().decode(content);
-			
-			// Count matches
-			const matches = text.match(new RegExp(searchText, 'gi'));
-			if (matches && matches.length > 0) {
-				results.push({
-					file: vscode.workspace.asRelativePath(file),
-					matchCount: matches.length
-				});
-			}
-		} catch (error) {
-			console.error(`Error reading file ${file.fsPath}:`, error);
-		}
-	}
-	
-	return results;
+  const files = await vscode.workspace.findFiles('**/*.{ts,js,java,cpp,md,env,yaml,json,py,tsx,jsx}', '**/node_modules/**');
+
+  const results: Array<{ file: string; matchCount: number }> = [];
+
+  const safePattern = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(safePattern, 'gi');
+
+  for (const file of files) {
+    try {
+      const content = await vscode.workspace.fs.readFile(file);
+      const text = new TextDecoder().decode(content);
+      const matches = text.match(regex);
+      if (matches && matches.length > 0) {
+        results.push({ file: vscode.workspace.asRelativePath(file), matchCount: matches.length });
+      }
+    } catch (err) {
+      console.error(`Error reading file ${file.fsPath}:`, err);
+    }
+  }
+
+  results.sort((a, b) => b.matchCount - a.matchCount);
+  return results;
 }
 
-// This method is called when your extension is deactivated
-export function deactivate() {}
+/**
+ * Webview HTML content with a modern "techy / AI" look and vis-network graph rendering.
+ * Graph button sends 'map' command; when graphData is received, it renders an interactive graph.
+ */
+function getWebviewContent(panel: vscode.WebviewPanel): string {
+  const cspSource = panel.webview.cspSource;
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>codebaseGPS</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} https: data:; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource} https: 'unsafe-inline';">
+
+<style>
+  :root{
+    --bg: var(--vscode-editor-background);
+    --panel: var(--vscode-sideBar-background);
+    --muted: rgba(255,255,255,0.06);
+    --accent: #00E6C3; /* neon teal */
+    --accent-2: #7C5CFF; /* purple */
+    --glass: rgba(255,255,255,0.03);
+    --radius: 12px;
+  }
+  html,body{height:100%;margin:0;background:linear-gradient(180deg, rgba(124,92,255,0.06) 0%, rgba(0,230,195,0.02) 100%), var(--bg); color:var(--vscode-foreground); font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; -webkit-font-smoothing:antialiased;}
+  .container{padding:16px;display:grid;grid-template-columns: 1fr 420px; gap:16px; height:calc(100vh - 32px);}
+  .card{background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00)); border:1px solid rgba(255,255,255,0.03); border-radius:var(--radius); box-shadow: 0 6px 18px rgba(2,6,23,0.4); overflow:hidden; display:flex; flex-direction:column;}
+  .header{display:flex;align-items:center;gap:12px;padding:16px;border-bottom:1px solid rgba(255,255,255,0.02);}
+  .logo{width:46px;height:46px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-2));display:flex;align-items:center;justify-content:center;color:#001018;font-weight:700;box-shadow:0 4px 18px rgba(124,92,255,0.12);font-family:monospace;}
+  .title{font-size:16px;font-weight:700;}
+  .subtitle{font-size:12px;opacity:.75;}
+  .toolbar{display:flex;align-items:center;gap:8px;padding:12px 16px;background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00));border-bottom:1px solid rgba(255,255,255,0.02);}
+  .controls{display:flex;gap:8px;align-items:center;}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:var(--vscode-button-foreground);cursor:pointer;font-weight:600;}
+  .btn.primary{background:linear-gradient(90deg,var(--accent),var(--accent-2)); color:#001018; box-shadow:0 6px 18px rgba(0,230,195,0.06); border:none;}
+  .btn.ghost{background:transparent;border:1px solid rgba(255,255,255,0.04);}
+  .btn:hover{transform:translateY(-1px);transition:all .12s ease;}
+  .main{padding:12px;display:flex;flex-direction:column;gap:12px;height:100%;}
+  #graphCard{flex:1;display:flex;flex-direction:column;gap:12px;padding:12px;}
+  #graph{flex:1;border-radius:10px;border:1px solid rgba(255,255,255,0.03); background: linear-gradient(180deg, rgba(0,0,0,0.25), rgba(255,255,255,0.01));overflow:hidden;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);font-size:14px;}
+  #diagram{flex:1;border-radius:10px;border:1px solid rgba(255,255,255,0.03); background: linear-gradient(180deg, rgba(0,0,0,0.25), rgba(255,255,255,0.01));overflow:auto;padding:8px;color:rgba(255,255,255,0.9);}
+  .rightPanel{display:flex;flex-direction:column;gap:12px;}
+  .prompt{padding:12px;display:flex;flex-direction:column;gap:10px;}
+  textarea#searchInput{width:100%;min-height:120px;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00));color:var(--vscode-input-foreground);resize:vertical;font-family:monospace;font-size:13px;}
+  .resultList{padding:12px;height:220px;overflow:auto;border-top:1px dashed rgba(255,255,255,0.02);}
+  .resultItem{display:flex;flex-direction:column;padding:10px;border-radius:8px;background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00));border:1px solid rgba(255,255,255,0.02);margin-bottom:8px;}
+  .resultMeta{display:flex;justify-content:space-between;font-size:12px;color:rgba(255,255,255,0.7);}
+  .resultPath{font-weight:700;margin-top:6px;font-size:13px;color:var(--vscode-textLink-foreground);}
+  .small{font-size:12px;opacity:0.8;}
+  .badge{padding:6px 8px;border-radius:999px;background:rgba(255,255,255,0.03);font-weight:700;color:var(--accent);}
+  .footerNote{font-size:12px;color:rgba(255,255,255,0.6);opacity:0.9;padding:8px 12px;}
+  .mini-controls{display:flex;gap:8px;align-items:center;}
+  .legend{display:flex;gap:8px;flex-wrap:wrap;padding:8px 0;}
+  .legend div{display:flex;gap:6px;align-items:center;font-size:12px}
+  .swatch{width:12px;height:12px;border-radius:3px;background:var(--accent);}
+  @media (max-width: 920px) {
+    .container{grid-template-columns: 1fr; padding:12px; }
+    .rightPanel{order:2}
+  }
+</style>
+</head>
+<body>
+  <div style="padding:10px 16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div class="logo">CG</div>
+        <div>
+          <div class="title">codebaseGPS</div>
+          <div class="subtitle">Navigate your repo with AI — instant context & maps</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="badge">Hackathon Mode</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="card">
+      <div class="header">
+        <div style="flex:1">
+          <div style="font-weight:700">Dependency Map</div>
+          <div class="small" style="margin-top:4px">Interactive architectural view — click nodes to open files</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div class="mini-controls">
+            <button id="btnGraphTop" class="btn primary">📈 Map</button>
+            <button id="btnFitTop" class="btn ghost">Fit</button>
+            <button id="btnExport" class="btn ghost">Export</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="graphCard" class="main">
+        <div id="graph">Click <strong>Map</strong> to fetch and render the dependency map.</div>
+        <div id="diagram" style="display:none;"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div class="legend">
+            <div><span class="swatch" style="background:var(--accent)"></span> Entry</div>
+            <div><span class="swatch" style="background:var(--accent-2)"></span> Core</div>
+            <div><span class="swatch" style="background:#34D399"></span> Data</div>
+            <div><span class="swatch" style="background:#FFA94D"></span> Infra</div>
+          </div>
+          <div class="small">Nodes: <span id="nodeCount">0</span> • Edges: <span id="edgeCount">0</span></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div class="small" style="font-weight:700;opacity:0.8;">Filters</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <label class="small"><input type="checkbox" class="filter-layer" value="1" checked> Entry</label>
+            <label class="small"><input type="checkbox" class="filter-layer" value="2" checked> Core</label>
+            <label class="small"><input type="checkbox" class="filter-layer" value="3" checked> Data</label>
+            <label class="small"><input type="checkbox" class="filter-layer" value="4" checked> Infra</label>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <label class="small"><input type="checkbox" class="filter-edge" value="import" checked> import</label>
+            <label class="small"><input type="checkbox" class="filter-edge" value="call" checked> call</label>
+            <label class="small"><input type="checkbox" class="filter-edge" value="data" checked> data</label>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div class="small" style="font-weight:700;opacity:0.8;">Graph Tools</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <label class="small">Depth <input id="depthRange" type="range" min="1" max="5" value="2"/></label>
+            <label class="small"><input id="focusToggle" type="checkbox"/> Focus mode</label>
+            <label class="small"><input id="layoutToggle" type="checkbox"/> Layered layout</label>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <label class="small">Diagram
+              <select id="diagramType" style="margin-left:6px;">
+                <option value="graph">Dependency graph</option>
+                <option value="flowchart">Flowchart</option>
+                <option value="component">Component diagram</option>
+                <option value="uml">UML class diagram</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rightPanel">
+      <div class="card">
+        <div class="header">
+          <div style="flex:1">
+            <div style="font-weight:700">Prompt Panel</div>
+            <div class="small">Ask about the codebase — search locally or use AI</div>
+          </div>
+        </div>
+        <div class="prompt">
+          <textarea id="searchInput" placeholder="e.g. Which file handles authentication?"></textarea>
+          <div style="display:flex;gap:8px;">
+            <button id="btnSearch" class="btn primary">🔍 Search</button>
+            <button id="btnAnalyze" class="btn">🤖 AI Analyze</button>
+            <button id="btnImpact" class="btn ghost">⚠️ Impact</button>
+          </div>
+        </div>
+        <div class="resultList" id="results">
+          <div class="small">Results and AI responses will appear here.</div>
+        </div>
+        <div class="footerNote">Tip: Use <strong>Map</strong> to visualize dependencies before making large changes.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- vis-network CDN (quick prototype) -->
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+
+    const btnGraph = document.getElementById('btnGraphTop');
+    const btnFit = document.getElementById('btnFitTop');
+    const btnExport = document.getElementById('btnExport');
+    const btnSearch = document.getElementById('btnSearch');
+    const btnAnalyze = document.getElementById('btnAnalyze');
+    const btnImpact = document.getElementById('btnImpact');
+    const depthRange = document.getElementById('depthRange');
+    const focusToggle = document.getElementById('focusToggle');
+    const layoutToggle = document.getElementById('layoutToggle');
+    const diagramType = document.getElementById('diagramType');
+    const graphContainer = document.getElementById('graph');
+    const diagramContainer = document.getElementById('diagram');
+
+    if (window.mermaid) {
+      mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+    }
+
+    btnGraph?.addEventListener('click', () => {
+      const mode = diagramType?.value || 'graph';
+      if (mode === 'graph') {
+        showGraph();
+        setGraphStatus('📡 Generating dependency map...');
+        vscode.postMessage({ command: 'map', text: null });
+      } else {
+        showDiagram();
+        setDiagramStatus('📡 Generating diagram...');
+        vscode.postMessage({ command: 'diagram', diagramType: mode, text: null });
+      }
+    });
+
+    btnFit?.addEventListener('click', () => {
+      if (network) network.fit();
+    });
+
+    layoutToggle?.addEventListener('change', () => {
+      applyLayout();
+    });
+
+    btnExport?.addEventListener('click', () => {
+      if (!lastGraph) return alert('No graph to export');
+      const dataStr = JSON.stringify(lastGraph, null, 2);
+      const blob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'codebasegps-graph.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    btnSearch?.addEventListener('click', () => {
+      const t = document.getElementById('searchInput').value.trim();
+      if (!t) return;
+      setResultsHtml('<div class="small">🔎 Searching locally...</div>');
+      vscode.postMessage({ command: 'search', text: t });
+    });
+
+    btnAnalyze?.addEventListener('click', () => {
+      const t = document.getElementById('searchInput').value.trim();
+      if (!t) return;
+      setResultsHtml('<div class="small">🤖 Calling AI...</div>');
+      vscode.postMessage({ command: 'analyzeWithLLM', text: t });
+    });
+
+    btnImpact?.addEventListener('click', () => {
+      const t = document.getElementById('searchInput').value.trim();
+      if (!t) return;
+      setResultsHtml('<div class="small">⚠️ Requesting impact analysis...</div>');
+      vscode.postMessage({ command: 'impact', text: t });
+    });
+
+    // Helpers
+    function setGraphStatus(msg) {
+      graphContainer.innerHTML = '<div style="opacity:.9;">' + msg + '</div>';
+    }
+    function setDiagramStatus(msg) {
+      diagramContainer.innerHTML = '<div style="opacity:.9;">' + msg + '</div>';
+    }
+    function setResultsHtml(html) {
+      const el = document.getElementById('results');
+      el.innerHTML = html;
+    }
+    function showGraph() {
+      graphContainer.style.display = 'flex';
+      diagramContainer.style.display = 'none';
+    }
+    function showDiagram() {
+      graphContainer.style.display = 'none';
+      diagramContainer.style.display = 'block';
+    }
+
+    // Networking from extension -> webview
+    let network = null;
+    let nodesDS = null;
+    let edgesDS = null;
+    let lastGraph = null;
+    let fullNodes = [];
+    let fullEdges = [];
+    let focusEnabled = false;
+    let focusHops = 2;
+    let focusNodeId = null;
+
+    window.addEventListener('message', event => {
+      const m = event.data;
+      switch (m.command) {
+        case 'searchResults':
+          renderSearchResults(m.results);
+          break;
+        case 'llmResponse':
+          renderAIResponse(m.text || '');
+          break;
+        case 'llmChunk':
+          appendAIChunk(m.text || '');
+          break;
+        case 'graphData':
+          showGraph();
+          lastGraph = m.data;
+          renderDependencyGraph(m.data);
+          break;
+        case 'diagramData':
+          showDiagram();
+          renderMermaidDiagram(m.diagram || '');
+          break;
+      }
+    });
+
+    function renderSearchResults(results) {
+      if (!results || results.length === 0) {
+        setResultsHtml('<div class="small">No local results found.</div>');
+        return;
+      }
+      const out = document.createElement('div');
+      results.forEach(r => {
+        const item = document.createElement('div');
+        item.className = 'resultItem';
+        item.innerHTML = \`
+          <div class="resultMeta">
+            <div class="small">Matches: \${r.matchCount}</div>
+            <div class="small">\${r.file}</div>
+          </div>
+          <div class="resultPath">\${r.file}</div>
+        \`;
+        item.addEventListener('click', () => {
+          vscode.postMessage({ command: 'openFile', filePath: r.file });
+        });
+        out.appendChild(item);
+      });
+      const container = document.getElementById('results');
+      container.innerHTML = '';
+      container.appendChild(out);
+    }
+
+    function renderAIResponse(text) {
+      setResultsHtml('<div class="llm-response">' + escapeHtml(text) + '</div>');
+    }
+
+    function appendAIChunk(chunk) {
+      const el = document.querySelector('.llm-response');
+      if (el) el.textContent += chunk;
+      else renderAIResponse(chunk);
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function renderDependencyGraph(graphPayload) {
+      graphContainer.innerHTML = '';
+
+      const nodes = (graphPayload.nodes || []).map(n => ({
+        id: n.id,
+        label: n.label,
+        title: n.type || '',
+        group: n.group || 0,
+        filePath: n.filePath || n.label || n.id
+      }));
+
+      const edges = (graphPayload.links || []).map((e, idx) => ({
+        id: 'e' + idx,
+        from: e.source,
+        to: e.target,
+        arrows: 'to',
+        title: e.type || 'import'
+      }));
+
+      fullNodes = nodes;
+      fullEdges = edges;
+
+      nodesDS = new vis.DataSet([]);
+      edgesDS = new vis.DataSet([]);
+
+      const data = { nodes: nodesDS, edges: edgesDS };
+      const options = {
+        layout: { improvedLayout: true },
+        physics: { stabilization: true, barnesHut: { gravitationalConstant: -20000 } },
+        interaction: { hover: true, navigationButtons: true, keyboard: true },
+        nodes: {
+          shape: 'box',
+          margin: 8,
+          font: { multi: 'html' },
+          color: { background: '#0b1220', border: 'rgba(255,255,255,0.06)' }
+        },
+        edges: {
+          color: 'rgba(255,255,255,0.08)',
+          smooth: { type: 'cubicBezier' }
+        },
+        groups: {
+          1: { color: { background: '#00E6C3', border: '#00E6C3' }, font: { color: '#001018' } },
+          2: { color: { background: '#7C5CFF', border: '#7C5CFF' }, font: { color: '#fff' } },
+          3: { color: { background: '#34D399', border: '#34D399' }, font: { color: '#001018' } },
+          4: { color: { background: '#FFA94D', border: '#FFA94D' }, font: { color: '#001018' } }
+        }
+      };
+
+      network = new vis.Network(graphContainer, data, options);
+
+      applyFilters();
+
+      // Update counts
+      updateCounts();
+
+      network.on('click', params => {
+        if (!params.nodes || params.nodes.length === 0) return;
+        const nodeId = params.nodes[0];
+        if (focusEnabled) {
+          focusNodeId = nodeId;
+          applyFilters();
+          return;
+        }
+      });
+
+      network.on('doubleClick', params => {
+        if (!params.nodes || params.nodes.length === 0) return;
+        const nodeId = params.nodes[0];
+        const node = (graphPayload.nodes || []).find(n => n.id === nodeId);
+        const filePath = node?.filePath || node?.label || node?.id;
+        vscode.postMessage({ command: 'openFile', filePath });
+      });
+
+      // subtle entrance animation
+      setTimeout(() => {
+        container.style.opacity = '1';
+      }, 120);
+    }
+
+    function getSelectedValues(selector) {
+      return Array.from(document.querySelectorAll(selector))
+        .filter(el => el.checked)
+        .map(el => el.value);
+    }
+
+    function applyFilters() {
+      if (!nodesDS || !edgesDS) return;
+      const allowedGroups = new Set(getSelectedValues('.filter-layer').map(v => parseInt(v, 10)));
+      const allowedEdgeTypes = new Set(getSelectedValues('.filter-edge'));
+
+      let filteredNodes = fullNodes.filter(n => allowedGroups.has(n.group || 0));
+      let filteredEdges = fullEdges.filter(e => {
+        const edgeType = (e.title || 'import').toLowerCase();
+        return allowedEdgeTypes.has(edgeType);
+      });
+
+      if (focusEnabled && focusNodeId) {
+        const neighborIds = getNeighborhood(focusNodeId, focusHops, filteredEdges);
+        filteredNodes = filteredNodes.filter(n => neighborIds.has(n.id));
+        const nodeIds = new Set(filteredNodes.map(n => n.id));
+        filteredEdges = filteredEdges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to));
+      } else {
+        const nodeIds = new Set(filteredNodes.map(n => n.id));
+        filteredEdges = filteredEdges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to));
+      }
+
+      nodesDS.clear();
+      edgesDS.clear();
+      nodesDS.add(filteredNodes.map(n => ({
+        id: n.id,
+        label: n.label,
+        title: n.title,
+        group: n.group,
+        filePath: n.filePath
+      })));
+      edgesDS.add(filteredEdges);
+      updateCounts();
+    }
+
+    function updateCounts() {
+      if (!nodesDS || !edgesDS) return;
+      document.getElementById('nodeCount').textContent = nodesDS.length.toString();
+      document.getElementById('edgeCount').textContent = edgesDS.length.toString();
+    }
+
+    function hookFilterControls() {
+      const layerInputs = document.querySelectorAll('.filter-layer');
+      const edgeInputs = document.querySelectorAll('.filter-edge');
+      layerInputs.forEach(i => i.addEventListener('change', applyFilters));
+      edgeInputs.forEach(i => i.addEventListener('change', applyFilters));
+      depthRange?.addEventListener('input', () => {
+        focusHops = parseInt(depthRange.value, 10);
+        applyFilters();
+      });
+      focusToggle?.addEventListener('change', () => {
+        focusEnabled = !!focusToggle.checked;
+        if (!focusEnabled) focusNodeId = null;
+        applyFilters();
+      });
+    }
+
+    hookFilterControls();
+
+    function getNeighborhood(startId, hops, edges) {
+      const adj = new Map();
+      edges.forEach(e => {
+        if (!adj.has(e.from)) adj.set(e.from, new Set());
+        if (!adj.has(e.to)) adj.set(e.to, new Set());
+        adj.get(e.from).add(e.to);
+        adj.get(e.to).add(e.from);
+      });
+
+      const visited = new Set([startId]);
+      let frontier = new Set([startId]);
+
+      for (let i = 0; i < hops; i++) {
+        const next = new Set();
+        frontier.forEach(id => {
+          const neighbors = adj.get(id) || new Set();
+          neighbors.forEach(n => {
+            if (!visited.has(n)) {
+              visited.add(n);
+              next.add(n);
+            }
+          });
+        });
+        frontier = next;
+      }
+
+      return visited;
+    }
+
+    function applyLayout() {
+      if (!network) return;
+      const layered = !!layoutToggle?.checked;
+      if (layered) {
+        network.setOptions({
+          layout: { hierarchical: { enabled: true, direction: 'LR', sortMethod: 'directed' } },
+          physics: { enabled: false }
+        });
+      } else {
+        network.setOptions({
+          layout: { hierarchical: { enabled: false } },
+          physics: { enabled: true, barnesHut: { gravitationalConstant: -20000 } }
+        });
+      }
+    }
+
+    function renderMermaidDiagram(text) {
+      if (!text) {
+        setDiagramStatus('No diagram data returned.');
+        return;
+      }
+      diagramContainer.innerHTML = '';
+      const id = 'mermaid-' + Date.now();
+      if (window.mermaid) {
+        mermaid.render(id, text).then(res => {
+          diagramContainer.innerHTML = res.svg;
+        }).catch(err => {
+          diagramContainer.innerHTML = '<div style="opacity:.9;">Failed to render diagram: ' + err.message + '</div>';
+        });
+      } else {
+        diagramContainer.textContent = text;
+      }
+    }
+  </script>
+</body>
+</html>`;
+}
+
+export function deactivate() {
+  // Cleanup if needed in future
+}
